@@ -1,196 +1,169 @@
-import os
+import streamlit as st
 import uuid
-import gradio as gr
 
 from loader import load_pdf
 from vectorstore import create_vector_store
 from chatbot import ask_question
 
-vector_store = None
-
+st.set_page_config(
+    page_title="PDF AI Assistant",
+    page_icon="📄",
+    layout="wide"
+)
 
 # -------------------------
-# Upload PDF
+# Custom CSS
 # -------------------------
-def process_pdf(pdf):
-    global vector_store
 
-    if pdf is None:
-        return "❌ Please upload a PDF first."
+st.markdown("""
+<style>
 
-    pdf_path = pdf.name if hasattr(pdf, "name") else pdf
+.main{
+    background:#f6f8fc;
+}
 
-    folder = f"chroma_db/{uuid.uuid4()}"
+.stButton>button{
+    width:100%;
+    border-radius:12px;
+    height:48px;
+    font-size:17px;
+    font-weight:bold;
+}
 
-    chunks = load_pdf(pdf_path)
+.user{
+    background:#2563eb;
+    color:white;
+    padding:15px;
+    border-radius:15px;
+    margin-bottom:10px;
+}
 
-    vector_store = create_vector_store(
-        chunks,
-        persist_directory=folder
+.bot{
+    background:white;
+    padding:15px;
+    border-radius:15px;
+    border:1px solid #ddd;
+    margin-bottom:20px;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# -------------------------
+# Session State
+# -------------------------
+
+if "vector_store" not in st.session_state:
+    st.session_state.vector_store = None
+
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# -------------------------
+# Sidebar
+# -------------------------
+
+with st.sidebar:
+
+    st.title("📄 PDF AI")
+
+    st.write("Upload any PDF and chat with it.")
+
+    pdf = st.file_uploader(
+        "Choose PDF",
+        type=["pdf"]
     )
 
-    filename = os.path.basename(pdf_path)
+    if st.button("🚀 Process PDF"):
 
-    return f"✅ '{filename}' uploaded successfully!\nYou can now ask questions."
+        if pdf is None:
+            st.warning("Upload a PDF first.")
 
+        else:
+
+            with st.spinner("Processing PDF..."):
+
+                import tempfile
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+                    temp_file.write(pdf.read())
+                    temp_pdf_path = temp_file.name
+
+                    chunks = load_pdf(temp_pdf_path)
+
+                folder = f"chroma_db/{uuid.uuid4()}"
+
+                st.session_state.vector_store = create_vector_store(
+                    chunks,
+                    persist_directory=folder
+                )
+
+            st.success("PDF Ready!")
+
+    st.divider()
+
+    if st.button("🗑 Clear Chat"):
+        st.session_state.messages = []
 
 # -------------------------
-# Chat Function
+# Main
 # -------------------------
-def respond(message, history):
 
-    global vector_store
+st.title("🤖 PDF AI Assistant")
 
-    if history is None:
-        history = []
+st.caption("Ask questions about your uploaded PDF.")
 
-    if vector_store is None:
+# Display chat
 
-        history.append(
+for msg in st.session_state.messages:
+
+    if msg["role"] == "user":
+
+        st.markdown(
+            f'<div class="user">🧑 {msg["content"]}</div>',
+            unsafe_allow_html=True
+        )
+
+    else:
+
+        st.markdown(
+            f'<div class="bot">🤖 {msg["content"]}</div>',
+            unsafe_allow_html=True
+        )
+
+# -------------------------
+# Input
+# -------------------------
+
+question = st.chat_input("Ask a question...")
+
+if question:
+
+    if st.session_state.vector_store is None:
+
+        st.warning("Upload a PDF first.")
+
+    else:
+
+        st.session_state.messages.append(
             {
-                "role": "assistant",
-                "content": "⚠️ Please upload a PDF first."
+                "role":"user",
+                "content":question
             }
         )
 
-        return history, ""
+        with st.spinner("Thinking..."):
 
-    answer = ask_question(message, vector_store)
-
-    history.append(
-        {
-            "role": "user",
-            "content": message
-        }
-    )
-
-    history.append(
-        {
-            "role": "assistant",
-            "content": answer
-        }
-    )
-
-    return history, ""
-
-
-def clear_chat():
-    return []
-
-
-# -------------------------
-# UI
-# -------------------------
-
-with gr.Blocks(
-    title="PDF AI Assistant"
-) as demo:
-
-    gr.Markdown(
-        """
-# 📄 PDF AI Assistant
-
-### 🤖 Chat with any PDF using AI
-
-Upload a PDF, click **Process PDF**, then ask questions about the document.
-
----
-"""
-    )
-
-    with gr.Row():
-
-        # ---------------- LEFT PANEL ----------------
-
-        with gr.Column(scale=1):
-
-            gr.Markdown("## 📂 Upload PDF")
-
-            pdf = gr.File(
-                label="Choose a PDF",
-                file_types=[".pdf"]
+            answer = ask_question(
+                question,
+                st.session_state.vector_store
             )
 
-            upload_btn = gr.Button(
-                "🚀 Process PDF",
-                variant="primary",
-                size="lg"
-            )
+        st.session_state.messages.append(
+            {
+                "role":"assistant",
+                "content":answer
+            }
+        )
 
-            status = gr.Textbox(
-                label="Status",
-                interactive=False,
-                lines=3
-            )
-
-            gr.Markdown("---")
-
-
-        # ---------------- RIGHT PANEL ----------------
-
-        with gr.Column(scale=2):
-
-            chatbot = gr.Chatbot(
-                label="💬 Chat",
-                height=550
-            )
-
-            msg = gr.Textbox(
-                label="Ask a question",
-                placeholder="Type your question here..."
-            )
-
-            with gr.Row():
-
-                ask_btn = gr.Button(
-                    "💬 Ask",
-                    variant="primary"
-                )
-
-                clear_btn = gr.Button(
-                    "🗑 Clear Chat"
-                )
-
-    # Events
-
-    upload_btn.click(
-        process_pdf,
-        inputs=pdf,
-        outputs=status
-    )
-
-    ask_btn.click(
-        respond,
-        inputs=[msg, chatbot],
-        outputs=[chatbot, msg]
-    )
-
-    msg.submit(
-        respond,
-        inputs=[msg, chatbot],
-        outputs=[chatbot, msg]
-    )
-
-    clear_btn.click(
-        clear_chat,
-        outputs=chatbot
-    )
-
-    gr.Markdown(
-        """
----
-
-### ⚡ Built With
-
-- 🦜 LangChain
-- 🤗 Hugging Face Embeddings
-- 🗄️ ChromaDB
-- 🚀 Groq Llama 3.1
-- 🎨 Gradio
-
-Made with ❤️ by Lydia
-"""
-    )
-
-
-demo.launch()
+        st.rerun()
